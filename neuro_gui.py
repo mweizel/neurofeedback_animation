@@ -1,189 +1,329 @@
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
 import random
 import time
 import math
 
-# Try importing pygame for audio
+# --- 0. AUDIO SYSTEM (Safe Wrapper) ---
 try:
     import pygame
     PYGAME_AVAILABLE = True
 except ImportError:
     PYGAME_AVAILABLE = False
-    print("Warning: 'pygame' not found. Audio will be disabled. Run 'pip install pygame'")
+    print("Note: 'pygame' not installed. Audio disabled.")
 
 class AudioController:
     def __init__(self):
         self.enabled = False
         if PYGAME_AVAILABLE:
             pygame.mixer.init()
-            # PLACEHOLDERS: In a real scenario, load your files here
-            # self.bg_channel = pygame.mixer.Channel(0)
-            # self.sfx_tree = pygame.mixer.Sound("tree_grow.wav") 
+            # To use: self.coin_sound = pygame.mixer.Sound("coin.wav")
             pass
 
-    def start_bg_music(self):
+    def update_volume(self, world_health):
         if PYGAME_AVAILABLE and self.enabled:
-            # pygame.mixer.music.load("relaxing_drone.mp3")
-            # pygame.mixer.music.play(-1) # Loop
+            # Volume gets louder as world gets healthier
+            # pygame.mixer.music.set_volume(max(0.1, world_health))
             pass
 
-    def set_volume(self, level):
-        # Level is 0.0 to 1.0. 
-        # Map signal strength to volume
+    def play_coin(self):
         if PYGAME_AVAILABLE and self.enabled:
-            pygame.mixer.music.set_volume(max(0.1, level))
+            # if self.coin_sound: self.coin_sound.play()
+            print("Audio: *Chime*") 
 
-    def play_event(self, event_type):
-        if PYGAME_AVAILABLE and self.enabled:
-            if event_type == "tree":
-                # self.sfx_tree.play()
-                pass
+# --- 1. UTILITIES ---
+def lerp_color(c1, c2, t):
+    """Linear interpolation between two RGB tuples."""
+    t = max(0.0, min(1.0, t)) # Clamp
+    return (
+        int(c1[0] + (c2[0] - c1[0]) * t),
+        int(c1[1] + (c2[1] - c1[1]) * t),
+        int(c1[2] + (c2[2] - c1[2]) * t)
+    )
 
+def rgb_to_hex(rgb):
+    return "#%02x%02x%02x" % rgb
+
+# --- 2. SCENARIO BASE CLASS ---
+class ScenarioBase:
+    def __init__(self, name):
+        self.name = name
+        self.settings = {} 
+
+    def start(self): 
+        pass
+    
+    def update(self, dt, world_health, signal): 
+        pass
+    
+    def draw(self, canvas, w, h, world_health): 
+        pass
+    
+    def get_settings_panel(self, parent):
+        return tk.Label(parent, text="No settings.")
+
+# --- 3. NATURE SCENARIO (Restored v2 Features) ---
+class NatureScenario(ScenarioBase):
+    def __init__(self):
+        super().__init__("Nature Restoration")
+        self.settings = {
+            "tree_probability": 0.005,
+            "flower_speed": 0.8
+        }
+        self.plants = []
+        
+        # Color Palettes
+        self.sky_dead = (100, 100, 110)
+        self.sky_alive = (135, 206, 235)
+        self.grass_dead = (101, 67, 33)
+        self.grass_alive = (34, 139, 34)
+
+    def start(self):
+        self.plants = []
+
+    def update(self, dt, world_health, signal):
+        # Only spawn if healthy enough
+        if world_health > 0.6:
+            # Flowers
+            if random.random() < 0.05:
+                self.plants.append(self._create_plant('flower', world_health))
+            
+            # Trees (Rare, configurable)
+            if random.random() < self.settings["tree_probability"]:
+                self.plants.append(self._create_plant('tree', world_health))
+
+        # Grow plants
+        for p in self.plants:
+            # They only grow if the world is somewhat healthy
+            if world_health > 0.3 and p['size'] < p['max_size']:
+                p['size'] += self.settings["flower_speed"] * dt
+
+        # Cull old plants to save memory
+        if len(self.plants) > 250: self.plants.pop(0)
+
+    def _create_plant(self, p_type, health):
+        return {
+            'type': p_type,
+            'x': random.randint(0, 1200),
+            'y': random.randint(400, 800), # Rough horizon line
+            'size': 0.1,
+            'max_size': random.uniform(0.8, 1.2) if p_type == 'flower' else random.uniform(2.0, 3.5),
+            'color': random.choice(["red", "white", "yellow", "purple"]) if p_type == 'flower' else "forestgreen"
+        }
+
+    def draw(self, canvas, w, h, world_health):
+        # 1. Background Interpolation (The "Dry vs Lush" logic)
+        curr_sky = lerp_color(self.sky_dead, self.sky_alive, world_health)
+        curr_grass = lerp_color(self.grass_dead, self.grass_alive, world_health)
+        
+        # Sky
+        canvas.create_rectangle(0, 0, w, h*0.6, fill=rgb_to_hex(curr_sky), outline="")
+        # Grass
+        canvas.create_rectangle(0, h*0.6, w, h, fill=rgb_to_hex(curr_grass), outline="")
+        
+        # Sun/Moon
+        sun_col = lerp_color((200, 200, 200), (255, 215, 0), world_health)
+        canvas.create_oval(w-150, 50, w-50, 150, fill=rgb_to_hex(sun_col), outline="")
+
+        # 2. Draw Plants
+        # Sort by Y for depth perspective
+        self.plants.sort(key=lambda p: p['y'])
+        
+        for p in self.plants:
+            # Clamp X to screen
+            px = p['x'] % w
+            py = p['y']
+            
+            # Adjust Y based on canvas height (dynamic resizing)
+            if py > h: py = h - 20
+            if py < h*0.6: py = int(h*0.6) + 20
+
+            scale = p['size']
+            
+            if p['type'] == 'flower':
+                stem_h = 20 * scale
+                canvas.create_line(px, py, px, py-stem_h, fill="darkgreen", width=2)
+                # Petals
+                r = 6 * scale
+                canvas.create_oval(px-r, py-stem_h-r, px+r, py-stem_h+r, fill=p['color'], outline="")
+            
+            elif p['type'] == 'tree':
+                trunk_w = 12 * scale
+                trunk_h = 70 * scale
+                foliage = 35 * scale
+                # Trunk
+                canvas.create_rectangle(px-trunk_w/2, py, px+trunk_w/2, py-trunk_h, fill="#5D4037", outline="")
+                # Foliage
+                canvas.create_oval(px-foliage, py-trunk_h-foliage, px+foliage, py-trunk_h+foliage, fill=p['color'], outline="")
+
+    def get_settings_panel(self, parent):
+        f = tk.Frame(parent)
+        tk.Label(f, text="Nature Settings", font=("bold", 10)).pack(anchor="w")
+        
+        tk.Label(f, text="Tree Probability:").pack(anchor="w")
+        s1 = tk.Scale(f, from_=0.0, to=0.02, resolution=0.001, orient=tk.HORIZONTAL)
+        s1.set(self.settings["tree_probability"])
+        s1.pack(fill=tk.X)
+        s1.config(command=lambda v: self.settings.update({"tree_probability": float(v)}))
+
+        tk.Label(f, text="Growth Speed:").pack(anchor="w")
+        s2 = tk.Scale(f, from_=0.1, to=3.0, resolution=0.1, orient=tk.HORIZONTAL)
+        s2.set(self.settings["flower_speed"])
+        s2.pack(fill=tk.X)
+        s2.config(command=lambda v: self.settings.update({"flower_speed": float(v)}))
+        return f
+
+# --- 4. FLIGHT SCENARIO (Placeholder) ---
+class FlightScenario(ScenarioBase):
+    def __init__(self):
+        super().__init__("Flight Mode")
+        self.y = 300
+    
+    def update(self, dt, health, sig):
+        target = 600 - (500 * health)
+        self.y += (target - self.y) * 2 * dt
+    
+    def draw(self, canvas, w, h, health):
+        canvas.create_rectangle(0,0,w,h, fill="#87CEEB", outline="")
+        canvas.create_text(w/2, self.y, text="✈️", font=("Arial", 50))
+
+# --- 5. MAIN APPLICATION ---
 class NeurofeedbackApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("NeuroFeedback Training Module v2.0")
-        self.root.geometry("1100x750")
+        self.root.title("NeuroFeedback Training v4.0")
+        self.root.geometry("1000x700")
 
         self.audio = AudioController()
 
-        # --- Configuration ---
+        # Global State
+        self.scenarios = [NatureScenario(), FlightScenario()]
+        self.current_scenario = self.scenarios[0]
+        
         self.settings = {
             "threshold": 0.5,
-            "training_time_min": 5,
-            "sim_mode": False, 
-            "combo_enabled": True,
-            "randomness": 0.2,
-            
-            # NEW SETTINGS
-            "base_points_per_sec": 5,    # Slower default points
-            "smoothing_factor": 0.05,    # Low Pass Filter (0.01 = very slow, 1.0 = instant)
+            "smoothing": 0.05,
+            "base_points": 10,
             "audio_enabled": False,
+            "sim_mode": False
         }
-        
-        # State Variables
+
         self.running = False
+        self.paused = False
         self.start_time = 0
-        self.score = 0
-        self.score_velocity = 0 # For momentum effect
+        self.total_time = 300 # 5 mins default
         
-        self.raw_signal = 0.0      # Instant input (mouse or EEG)
-        self.smooth_signal = 0.0   # Averaged value for transitions
-        self.world_health = 0.0    # 0.0 (Dead) to 1.0 (Lush)
-        
-        self.consecutive_green_time = 0
+        # Signal & Scoring
+        self.raw_signal = 0.0
+        self.smooth_signal = 0.0
+        self.world_health = 0.0
+        self.score = 0.0
+        self.score_velocity = 0.0
+
         self.last_update_time = time.time()
         
-        # Animation Objects
-        self.plants = [] # List of dicts: {'type': 'flower'|'tree', 'x', 'y', 'size', 'max_size', 'color'}
-
         self.setup_ui()
         self.update_loop()
 
     def setup_ui(self):
-        # Control Panel
-        control_frame = tk.Frame(self.root, pady=10, padx=10, bg="#dddddd")
-        control_frame.pack(fill=tk.X)
+        # --- Top Control Bar ---
+        ctrl = tk.Frame(self.root, bg="#eee", pady=10, padx=10, relief=tk.RAISED, bd=2)
+        ctrl.pack(fill=tk.X)
 
-        # Standard Controls
-        tk.Label(control_frame, text="Time (min):", bg="#dddddd").pack(side=tk.LEFT)
-        self.time_entry = tk.Entry(control_frame, width=5)
-        self.time_entry.insert(0, "5")
-        self.time_entry.pack(side=tk.LEFT, padx=5)
+        # 1. Scenario Selector
+        tk.Label(ctrl, text="Scenario:", bg="#eee").pack(side=tk.LEFT)
+        self.scn_var = tk.StringVar(value=self.current_scenario.name)
+        cb = ttk.Combobox(ctrl, textvariable=self.scn_var, values=[s.name for s in self.scenarios], state="readonly", width=15)
+        cb.bind("<<ComboboxSelected>>", self.change_scenario)
+        cb.pack(side=tk.LEFT, padx=5)
 
-        self.btn_start = tk.Button(control_frame, text="START", bg="#4CAF50", fg="white", font=("Arial", 10, "bold"), command=self.toggle_start)
+        # 2. Timer
+        tk.Label(ctrl, text="Min:", bg="#eee").pack(side=tk.LEFT)
+        self.entry_time = tk.Entry(ctrl, width=4)
+        self.entry_time.insert(0, "5")
+        self.entry_time.pack(side=tk.LEFT, padx=5)
+
+        # 3. Start Button
+        self.btn_start = tk.Button(ctrl, text="START", bg="green", fg="white", font=("bold", 10), width=10, command=self.toggle_start)
         self.btn_start.pack(side=tk.LEFT, padx=15)
-        
-        tk.Button(control_frame, text="Advanced Settings", command=self.open_settings).pack(side=tk.LEFT)
 
-        # Signal Simulator (Hidden by default)
-        self.sim_frame = tk.Frame(control_frame, bg="#dddddd")
-        tk.Label(self.sim_frame, text="Simulate Signal:", bg="#dddddd", fg="red").pack(side=tk.LEFT, padx=10)
-        self.sim_slider = tk.Scale(self.sim_frame, from_=0, to=1, resolution=0.01, orient=tk.HORIZONTAL, length=200, command=self.on_slider_move)
-        self.sim_slider.set(0.0)
-        self.sim_slider.pack(side=tk.LEFT)
+        # 4. Settings Button
+        tk.Button(ctrl, text="⚙ Settings", command=self.open_settings).pack(side=tk.LEFT)
 
-        # Main Canvas
-        self.canvas = tk.Canvas(self.root, bg="#333")
+        # 5. Sim Slider (Hidden by default)
+        self.sim_frame = tk.Frame(ctrl, bg="#eee")
+        tk.Label(self.sim_frame, text="Signal Sim:", fg="red", bg="#eee").pack(side=tk.LEFT)
+        self.scale_sim = tk.Scale(self.sim_frame, from_=0, to=1, resolution=0.01, orient=tk.HORIZONTAL, length=150)
+        self.scale_sim.pack(side=tk.LEFT)
+        self.scale_sim.config(command=lambda v: setattr(self, 'raw_signal', float(v)))
+
+        # --- Canvas ---
+        self.canvas = tk.Canvas(self.root, bg="black")
         self.canvas.pack(fill=tk.BOTH, expand=True)
 
-    def on_slider_move(self, val):
-        self.raw_signal = float(val)
+    def change_scenario(self, event):
+        name = self.scn_var.get()
+        for s in self.scenarios:
+            if s.name == name:
+                self.current_scenario = s
+                # Restart scenario state if needed
+                if self.running: self.current_scenario.start()
+
+    def toggle_start(self):
+        if not self.running:
+            # START
+            try:
+                mins = float(self.entry_time.get())
+            except ValueError:
+                mins = 5
+            self.total_time = mins * 60
+            self.start_time = time.time()
+            self.score = 0
+            self.score_velocity = 0
+            self.running = True
+            self.btn_start.config(text="STOP", bg="red")
+            self.current_scenario.start()
+        else:
+            # STOP
+            self.running = False
+            self.btn_start.config(text="START", bg="green")
 
     def open_settings(self):
         win = tk.Toplevel(self.root)
         win.title("Advanced Settings")
-        win.geometry("400x450")
+        win.geometry("400x600")
 
-        def add_scale(label, key, from_, to_, res):
-            frame = tk.Frame(win, pady=5)
-            frame.pack(fill=tk.X, padx=10)
-            tk.Label(frame, text=label, width=25, anchor='w').pack(side=tk.LEFT)
-            val = tk.DoubleVar(value=self.settings[key])
-            s = tk.Scale(frame, from_=from_, to=to_, resolution=res, orient=tk.HORIZONTAL, variable=val)
-            s.pack(side=tk.RIGHT, fill=tk.X, expand=True)
-            return key, val
-
-        controls = []
-        controls.append(add_scale("Threshold (0-1):", "threshold", 0, 1, 0.05))
-        controls.append(add_scale("Smoothing (Bandwidth):", "smoothing_factor", 0.01, 0.3, 0.01))
-        controls.append(add_scale("Base Points / sec:", "base_points_per_sec", 1, 50, 1))
+        # Global Params
+        tk.Label(win, text="-- Global Settings --", font=("bold", 12)).pack(pady=10)
         
-        # Checkboxes
-        c_frame = tk.Frame(win, pady=10)
-        c_frame.pack()
+        def add_slider(lbl, key, f, t, r):
+            tk.Label(win, text=lbl).pack(anchor="w", padx=10)
+            s = tk.Scale(win, from_=f, to=t, resolution=r, orient=tk.HORIZONTAL)
+            s.set(self.settings[key])
+            s.pack(fill=tk.X, padx=10)
+            s.config(command=lambda v: self.settings.update({key: float(v)}))
+
+        add_slider("Threshold:", "threshold", 0, 1, 0.05)
+        add_slider("Smoothing (Bandwidth):", "smoothing", 0.01, 0.5, 0.01)
+        add_slider("Base Score Points:", "base_points", 1, 50, 1)
+
+        # Toggles
+        vf = tk.Frame(win); vf.pack(pady=5)
         v_sim = tk.BooleanVar(value=self.settings["sim_mode"])
-        tk.Checkbutton(c_frame, text="Enable Sim Slider", variable=v_sim).pack(anchor='w')
         
-        v_audio = tk.BooleanVar(value=self.settings["audio_enabled"])
-        tk.Checkbutton(c_frame, text="Enable Audio", variable=v_audio).pack(anchor='w')
-
-        def save():
-            for key, val in controls:
-                self.settings[key] = val.get()
-            
+        def toggle_sim():
             self.settings["sim_mode"] = v_sim.get()
-            self.settings["audio_enabled"] = v_audio.get()
-            self.audio.enabled = v_audio.get()
+            if v_sim.get(): self.sim_frame.pack(side=tk.LEFT, padx=10)
+            else: self.sim_frame.pack_forget()
 
-            if self.settings["sim_mode"]:
-                self.sim_frame.pack(side=tk.LEFT)
-            else:
-                self.sim_frame.pack_forget()
-            win.destroy()
+        tk.Checkbutton(vf, text="Enable Sim Slider", variable=v_sim, command=toggle_sim).pack(side=tk.LEFT)
 
-        tk.Button(win, text="Save & Close", command=save, bg="#ccc").pack(pady=20)
+        # Scenario Specific
+        tk.Label(win, text=f"-- {self.current_scenario.name} --", font=("bold", 12)).pack(pady=15)
+        sc_panel = self.current_scenario.get_settings_panel(win)
+        sc_panel.pack(fill=tk.BOTH, expand=True, padx=10)
 
-    def toggle_start(self):
-        if not self.running:
-            try:
-                mins = float(self.time_entry.get())
-            except: mins = 5
-            self.start_time = time.time()
-            self.total_time_sec = mins * 60
-            self.score = 0
-            self.plants = [] 
-            self.smooth_signal = 0.0 # Reset smoothing
-            self.consecutive_green_time = 0
-            self.running = True
-            self.btn_start.config(text="STOP", bg="#f44336")
-            self.audio.start_bg_music()
-        else:
-            self.running = False
-            self.btn_start.config(text="START", bg="#4CAF50")
-            if PYGAME_AVAILABLE: pygame.mixer.music.stop()
-
-    def lerp_color(self, c1, c2, t):
-        """Linear interpolation between two RGB tuples."""
-        return (
-            int(c1[0] + (c2[0] - c1[0]) * t),
-            int(c1[1] + (c2[1] - c1[1]) * t),
-            int(c1[2] + (c2[2] - c1[2]) * t)
-        )
-
-    def rgb_to_hex(self, rgb):
-        return "#%02x%02x%02x" % rgb
+        tk.Button(win, text="Done", command=win.destroy).pack(pady=10)
 
     def update_loop(self):
         now = time.time()
@@ -191,176 +331,92 @@ class NeurofeedbackApp:
         self.last_update_time = now
 
         if self.running:
+            # 1. Timer Logic
             elapsed = now - self.start_time
-            remaining = max(0, self.total_time_sec - elapsed)
-            if remaining == 0: self.toggle_start()
+            remaining = max(0, self.total_time - elapsed)
+            if remaining == 0: self.toggle_start() # Time's up
 
-            # --- 1. Signal Smoothing (Low Pass Filter) ---
-            # This creates the "Transition Phase" you requested.
-            alpha = self.settings["smoothing_factor"]
-            # Logic: New = Old + alpha * (Target - Old)
-            self.smooth_signal = self.smooth_signal + alpha * (self.raw_signal - self.smooth_signal)
+            # 2. Signal Processing (Low Pass Filter)
+            # This makes the "Transition" smooth
+            alpha = self.settings["smoothing"]
+            self.smooth_signal += alpha * (self.raw_signal - self.smooth_signal)
 
-            # Determine "Health" of the world (0.0 to 1.0) relative to threshold
-            # If we are way below threshold, health is 0. If above, it scales to 1.
-            threshold = self.settings["threshold"]
+            # 3. Calculate World Health (Visual State)
+            # 1.0 = Lush, 0.0 = Dead
+            # We create a "soft window" around the threshold
+            thresh = self.settings["threshold"]
             
-            # Create a soft transition range around the threshold
-            if self.smooth_signal < (threshold - 0.1):
-                target_health = 0.0
-            elif self.smooth_signal > threshold:
+            target_health = 0.0
+            if self.smooth_signal > thresh:
                 target_health = 1.0
-            else:
-                # In the transition zone
-                target_health = 0.5
-
-            # Smooth the health metric too for visual changes
-            self.world_health = self.world_health + (2.0 * dt) * (target_health - self.world_health)
-            self.world_health = max(0.0, min(1.0, self.world_health))
-
-            is_above_threshold = self.smooth_signal > threshold
-
-            # --- 2. Scoring Momentum ---
-            # If green, accelerate point gain. If red, decelerate.
-            target_velocity = 0
-            if is_above_threshold:
-                target_velocity = self.settings["base_points_per_sec"]
-                self.consecutive_green_time += dt
-            else:
-                target_velocity = 0
-                self.consecutive_green_time = 0
+            elif self.smooth_signal > (thresh - 0.15):
+                # Transition zone (e.g. 0.35 to 0.5 if thresh is 0.5)
+                ratio = (self.smooth_signal - (thresh-0.15)) / 0.15
+                target_health = ratio * 0.5 # capped at half health in transition
             
-            # Smooth velocity change (Momentum)
-            self.score_velocity += (target_velocity - self.score_velocity) * (1.0 * dt)
+            # Smooth the health value too
+            self.world_health += (target_health - self.world_health) * 2 * dt
+
+            # 4. Scoring Logic (Momentum)
+            if self.smooth_signal > thresh:
+                # Accelerate points
+                self.score_velocity += 5 * dt 
+                if self.score_velocity > self.settings["base_points"]: 
+                    self.score_velocity = self.settings["base_points"]
+            else:
+                # Decelerate points (Coasting)
+                self.score_velocity -= 5 * dt
+                if self.score_velocity < 0: self.score_velocity = 0
+            
             self.score += self.score_velocity * dt
 
-            # --- 3. Audio Update ---
-            self.audio.set_volume(self.world_health)
+            # 5. Audio
+            self.audio.update_volume(self.world_health)
 
-            # --- 4. Render Scene ---
-            self.draw_scene(dt)
-            self.draw_hud(remaining)
-        
-        else:
+            # 6. Scenario Update
+            self.current_scenario.update(dt, self.world_health, self.smooth_signal)
+
+            # 7. Drawing
             self.canvas.delete("all")
-            self.canvas.create_text(550, 350, text="Ready", fill="white", font=("Arial", 30))
+            w = self.canvas.winfo_width()
+            h = self.canvas.winfo_height()
+            
+            # Draw Scenario
+            self.current_scenario.draw(self.canvas, w, h, self.world_health)
+            
+            # Draw HUD
+            self.draw_hud(remaining, w, h)
+
+        else:
+            # Idle Screen
+            self.canvas.delete("all")
+            self.canvas.create_text(500, 350, text="Press START", fill="white", font=("Arial", 30))
 
         self.root.after(33, self.update_loop)
 
-    def draw_scene(self, dt):
-        self.canvas.delete("all")
-        w = self.canvas.winfo_width()
-        h = self.canvas.winfo_height()
-
-        # --- A. Background Transition ---
-        # Color Palettes (RGB)
-        sky_dead = (100, 100, 110)
-        sky_alive = (135, 206, 235)
-        grass_dead = (101, 67, 33)
-        grass_alive = (34, 139, 34)
-
-        current_sky = self.lerp_color(sky_dead, sky_alive, self.world_health)
-        current_grass = self.lerp_color(grass_dead, grass_alive, self.world_health)
-
-        # Draw Background
-        self.canvas.create_rectangle(0, 0, w, h*0.7, fill=self.rgb_to_hex(current_sky), outline="")
-        self.canvas.create_rectangle(0, h*0.7, w, h, fill=self.rgb_to_hex(current_grass), outline="")
-
-        # --- B. Spawning Logic ---
-        # Only spawn if the world is "healthy" (above thresholdish)
-        if self.world_health > 0.8:
-            
-            # Flower Spawn (Common)
-            if random.random() < 0.05: 
-                self.plants.append({
-                    'type': 'flower',
-                    'x': random.randint(20, w-20),
-                    'y': random.randint(int(h*0.7) + 20, h-10),
-                    'size': 0.1,
-                    'max_size': random.uniform(0.8, 1.2),
-                    'color': random.choice(["red", "white", "yellow", "orange"]),
-                    'growth_speed': 0.5
-                })
-            
-            # Tree Spawn (Rare OR Sustained Effort)
-            # High chance if held for 10s, Low chance randomly
-            spawn_tree = False
-            if self.consecutive_green_time > 10 and random.random() < 0.05:
-                spawn_tree = True
-                self.consecutive_green_time = 0 # Consume the "charge" or keep it? Let's consume slightly to space trees
-            elif random.random() < 0.001: # 0.1% chance random spawn
-                spawn_tree = True
-            
-            if spawn_tree:
-                self.plants.append({
-                    'type': 'tree',
-                    'x': random.randint(50, w-50),
-                    'y': int(h*0.7) + 20, # Trees rooted at horizon
-                    'size': 0.1,
-                    'max_size': random.uniform(2.0, 3.5), # Trees are big
-                    'color': "forestgreen",
-                    'growth_speed': 0.2 # Trees grow slow
-                })
-                self.audio.play_event("tree")
-
-        # --- C. Draw Plants ---
-        # Sort by Y so lower plants are drawn on top (perspective)
-        self.plants.sort(key=lambda p: p['y'])
-
-        for p in self.plants:
-            # Grow logic: Only grow if world is healthy
-            if self.world_health > 0.5 and p['size'] < p['max_size']:
-                p['size'] += p['growth_speed'] * dt
-
-            # Draw Logic
-            scale = p['size']
-            
-            if p['type'] == 'flower':
-                stem_h = 20 * scale
-                # Stem
-                self.canvas.create_line(p['x'], p['y'], p['x'], p['y']-stem_h, fill="darkgreen", width=2)
-                # Petals
-                r = 6 * scale
-                self.canvas.create_oval(p['x']-r, p['y']-stem_h-r, p['x']+r, p['y']-stem_h+r, fill=p['color'], outline="")
-            
-            elif p['type'] == 'tree':
-                trunk_w = 10 * scale
-                trunk_h = 60 * scale
-                foliage_r = 30 * scale
-                
-                # Trunk
-                self.canvas.create_rectangle(p['x']-trunk_w/2, p['y'], p['x']+trunk_w/2, p['y']-trunk_h, fill="#5D4037", outline="")
-                # Foliage (Circle)
-                self.canvas.create_oval(p['x']-foliage_r, p['y']-trunk_h-foliage_r, p['x']+foliage_r, p['y']-trunk_h+foliage_r, fill=p['color'], outline="")
-
-    def draw_hud(self, remaining):
+    def draw_hud(self, remaining, w, h):
         # Time
         mins, secs = divmod(int(remaining), 60)
-        self.canvas.create_text(1050, 30, text=f"{mins:02}:{secs:02}", font=("Courier", 18, "bold"), fill="white", anchor="e")
+        self.canvas.create_text(w-20, 30, text=f"{mins:02}:{secs:02}", font=("Courier", 24, "bold"), fill="white", anchor="e")
         
         # Score
-        self.canvas.create_text(50, 30, text=f"Points: {int(self.score)}", font=("Courier", 18, "bold"), fill="white", anchor="w")
+        self.canvas.create_text(20, 30, text=f"Score: {int(self.score)}", font=("Courier", 24, "bold"), fill="gold", anchor="w")
         
-        # Signal Bar (Visual Debug + Patient Feedback)
-        # Draw a bar that shows smoothed signal
-        bar_w = 200
-        bar_h = 10
-        x_start = 50
-        y_start = 60
+        # Debug Bar (Visual Feedback of Signal)
+        bx, by, bw, bh = 20, 70, 200, 15
+        self.canvas.create_rectangle(bx, by, bx+bw, by+bh, fill="#444", outline="white")
         
-        # Background bar
-        self.canvas.create_rectangle(x_start, y_start, x_start+bar_w, y_start+bar_h, fill="#555", outline="")
+        # Fill
+        fill_w = bw * self.smooth_signal
+        col = "green" if self.smooth_signal > self.settings["threshold"] else "orange"
+        if self.smooth_signal < (self.settings["threshold"] - 0.1): col = "red"
         
-        # Fill bar
-        fill_w = bar_w * self.smooth_signal
-        # Color changes based on threshold
-        fill_col = "green" if self.smooth_signal > self.settings["threshold"] else "orange"
-        self.canvas.create_rectangle(x_start, y_start, x_start+fill_w, y_start+bar_h, fill=fill_col, outline="")
+        self.canvas.create_rectangle(bx, by, bx+fill_w, by+bh, fill=col, outline="")
         
         # Threshold Marker
-        thresh_x = x_start + (bar_w * self.settings["threshold"])
-        self.canvas.create_line(thresh_x, y_start-5, thresh_x, y_start+bar_h+5, fill="white", width=2)
-
+        th_x = bx + (bw * self.settings["threshold"])
+        self.canvas.create_line(th_x, by-5, th_x, by+bh+5, fill="white", width=2)
+        self.canvas.create_text(th_x, by+25, text="Threshold", fill="white", font=("Arial", 8))
 
 if __name__ == "__main__":
     root = tk.Tk()
