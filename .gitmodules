@@ -1,0 +1,6 @@
+[submodule "neurofeedback_hardware"]
+	path = neurofeedback_hardware
+	url = https://github.com/mweizel/neurofeedback_hardware.git
+[submodule "ez-tree"]
+	path = ez-tree
+	url = https://github.com/mweizel/ez-tree.git
