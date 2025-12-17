@@ -56,13 +56,31 @@ class DataStream:
     """
     MODE_MANUAL = "Manual (Mouse)"
     MODE_SYNTHETIC = "Synthetic (Demo Wave)"
-    MODE_HARDWARE = "Real EEG (BrainFlow)"
+    MODE_HARDWARE = "Real EEG (BrainFlow/UDP)"
 
     def __init__(self):
         self.mode = self.MODE_MANUAL
         self.manual_value = 0.0
         self.start_time = time.time()
         self.board = None # Placeholder for BrainFlow board object
+        
+        # UDP Setup for listening to nfrun.py
+        self.udp_ip = "127.0.0.1"
+        self.udp_port = 1977
+        self.sock = None
+        self.latest_udp_value = 0.0 # Store last received value
+
+    def _ensure_udp_connected(self):
+        if self.sock is None:
+            import socket
+            try:
+                self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                self.sock.bind((self.udp_ip, self.udp_port))
+                self.sock.setblocking(0) # Non-blocking mode is CRITICAL for GUI
+                print(f"UDP Listener bound to {self.udp_ip}:{self.udp_port}")
+            except Exception as e:
+                print(f"Failed to bind UDP: {e}")
+                self.sock = None
 
     def set_manual_input(self, val):
         self.manual_value = float(val)
@@ -80,8 +98,34 @@ class DataStream:
             return max(0.0, min(1.0, val))
             
         elif self.mode == self.MODE_HARDWARE:
-            # FUTURE BRAINFLOW CODE GOES HERE
-            return 0.0
+            self._ensure_udp_connected()
+            if self.sock:
+                import re
+                try:
+                    # Drain the socket to get the absolutely latest packet
+                    # (We don't want to process old buffered packets)
+                    last_data = None
+                    while True:
+                        try:
+                            data, _ = self.sock.recvfrom(1024)
+                            last_data = data
+                        except BlockingIOError:
+                            break # No more data
+                    
+                    if last_data:
+                        string = last_data.decode('utf-8')
+                        # Matches format from nfcomm.py: "(r,g,b)"
+                        # nfrun.py sends feedback as blue channel: (0, 0, value)
+                        match = re.match(r'\((\d+),(\d+),(\d+)\)', string) 
+                        if match: 
+                            vals = tuple(map(int, match.groups()))
+                            # We use the Blue channel (index 2) as the signal intensity
+                            # Value is 0-255, we normalize to 0.0-1.0
+                            self.latest_udp_value = vals[2] / 255.0
+                except Exception as e:
+                    print(f"UDP Read Error: {e}")
+            
+            return self.latest_udp_value
             
         return 0.0
 
